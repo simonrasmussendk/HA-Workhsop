@@ -1,0 +1,99 @@
+blueprint:
+  name: Voice assistant volume ducking
+  description: "On voice assist, set ducking volume by factor on every media player in the same room"
+  domain: automation
+  author: LukaGra
+  source_url: https://github.com/simonrasmussendk/HA-Workshop/blob/main/blueprints/VoicePE_Room_MP_Volume.yaml
+  input:
+    version:
+      name: Version
+      description: just for you to know
+      default: v250109
+    assist:
+      name: Assist satellite
+      description: status entity
+      selector:
+        entity:
+          filter:
+            - domain: assist_satellite
+    ducking_factor:
+      name: Ducking factor
+      description: "Volume reduction factor"
+      default: 3
+      selector:
+        number:
+          min: 2
+          max: 5
+          mode: slider
+          step: 1
+
+variables:
+  assist: !input assist
+  ducking_factor: !input ducking_factor
+
+triggers:
+  - trigger: state
+    entity_id: !input assist
+    to: null
+conditions:
+  - condition: not
+    conditions:
+      - condition: state
+        entity_id: !input assist
+        state: idle
+      - condition: state
+        entity_id: !input assist
+        state: unavailable
+      - condition: state
+        entity_id: !input assist
+        state: unknown
+actions:
+  - variables:
+      mplayers: >-
+        ""{%for entity in [area_id(assist)] |map('area_entities') |first
+        |select('search', 'media_player') |select('is_state','playing')
+        |select('ne', (device_entities(device_id(assist))|select('search',
+        'media_player')|first))|list %}, ["{{entity}}", "{{ (state_attr(entity,
+        'volume_level')|float/ducking_factor)|round(2)}}"]{%endfor%}
+  - condition: template
+    value_template: "{{ mplayers|select|list != [] }}"
+  - alias: repeat for each media_player in the area
+    repeat:
+      sequence:
+        - variables:
+            mp: "{{ (repeat.item)[0] }}"
+            vol_anon: "{{ (repeat.item)[1] }}"
+            vol_base: "{{ ((repeat.item)[1]|float *ducking_factor)|round(2) }}"
+        - action: media_player.volume_set
+          data:
+            volume_level: "{{ vol_anon|float(0.2) }}"
+          target:
+            entity_id: "{{ mp }}"
+      for_each: "{{ mplayers|select|list }}"
+  - wait_for_trigger:
+      - trigger: state
+        entity_id: !input assist
+        to: idle
+    timeout:
+      hours: 0
+      minutes: 0
+      seconds: 20
+      milliseconds: 0
+  - alias: repeat for each media_player in the area
+    repeat:
+      sequence:
+        - variables:
+            mp: "{{ (repeat.item)[0] }}"
+            vol_anon: "{{ (repeat.item)[1] }}"
+            vol_base: "{{ ((repeat.item)[1]|float *ducking_factor)|round(2) }}"
+        - condition: template
+          value_template: "{{ state_attr(mp, 'volume_level')|float == vol_anon|float }}"
+        - action: media_player.volume_set
+          data:
+            volume_level: "{{ vol_base|float(0.2) }}"
+          target:
+            entity_id: "{{ mp }}"
+      for_each: "{{ mplayers|select|list }}"
+mode: single
+trace:
+  stored_traces: 30
